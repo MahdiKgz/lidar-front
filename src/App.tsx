@@ -1,0 +1,48 @@
+import { useEffect, useRef, useState, lazy, Suspense } from 'react';
+import { UploadCloud, Layers, Scan, Pause, Play, Trash2, RefreshCw, Crosshair, Mountain, ArrowUpLeft, Check, FileBox } from 'lucide-react';
+import { api, bytes, type Dataset, type Session } from './api';
+import { SESSION_KEY, uploadFile } from './upload';
+const Viewer = lazy(() => import('./Viewer'));
+const labels: Record<string, string> = { UPLOADING: 'در حال آپلود', UPLOADED: 'آمادهٔ پردازش', QUEUED: 'در صف پردازش', PROCESSING: 'در حال پردازش', READY: 'آمادهٔ نمایش', FAILED: 'ناموفق', DELETING: 'در حال حذف' };
+function saved(): Session | null { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { return null; } }
+export default function App() {
+  const [datasets, setDatasets] = useState<Dataset[]>([]), [selected, setSelected] = useState<Dataset | null>(null);
+  const [session, setSession] = useState<Session | null>(saved), [file, setFile] = useState<File | null>(null);
+  const [loaded, setLoaded] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [connected, setConnected] = useState(false), [page, setPage] = useState(1), [total, setTotal] = useState(0);
+  const [search, setSearch] = useState(''), [points, setPoints] = useState(0), [pointSize, setPointSize] = useState(2), [visible, setVisible] = useState(true);
+  const controller = useRef<AbortController | null>(null); const input = useRef<HTMLInputElement>(null);
+  const refresh = async () => {
+    try { const result = await api<{ data: Dataset[]; total: number }>(`/datasets?page=${page}&limit=12&search=${encodeURIComponent(search)}`); setDatasets(result.data); setTotal(result.total); setConnected(true); setSelected(previous => previous ? result.data.find(d => d.id === previous.id) ?? previous : null); }
+    catch (e) { setConnected(false); setError((e as Error).message); }
+  };
+  useEffect(() => { let alive = true; const run = async () => { if (alive) await refresh(); }; void run(); const interval = setInterval(run, 5000); return () => { alive = false; clearInterval(interval); }; }, [page, search]);
+  useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => {
+    if (!selected || ['READY', 'FAILED', 'DELETING'].includes(selected.status)) return;
+    let active = true;
+    const interval = setInterval(async () => {
+      try { const fresh = await api<Dataset>(`/datasets/${selected.id}`); if (active) setSelected(current => current?.id === fresh.id ? fresh : current); } catch { /* Main library polling reports connectivity errors. */ }
+    }, 3000);
+    return () => { active = false; clearInterval(interval); };
+  }, [selected?.id, selected?.status]);
+  const start = async () => {
+    if (!file || busy) return; setError(''); setBusy(true); controller.current = new AbortController();
+    try { await uploadFile(file, session, controller.current.signal, (s, n) => { setSession(s); setLoaded(n); }); setSession(null); setFile(null); setLoaded(0); await refresh(); }
+    catch (e) { if ((e as Error).name !== 'AbortError') setError((e as Error).message); }
+    finally { setBusy(false); }
+  };
+  const cancel = async () => { controller.current?.abort(); if (!session) return; try { await api(`/uploads/${session.uploadSessionId}`, 'DELETE'); localStorage.removeItem(SESSION_KEY); setSession(null); setLoaded(0); setFile(null); await refresh(); } catch (e) { setError((e as Error).message); } };
+  const action = async (dataset: Dataset, remove = false) => { if (remove && !confirm(`«${dataset.originalFilename}» و فایل‌های وابسته حذف شوند؟`)) return; try { await api(`/datasets/${dataset.id}${remove ? '' : '/requeue'}`, remove ? 'DELETE' : 'POST'); if (remove && selected?.id === dataset.id) setSelected(null); await refresh(); } catch (e) { setError((e as Error).message); } };
+  const progress = Math.min(100, Math.round(loaded / Number(session?.fileSize || file?.size || 1) * 100));
+  return <div className="app"><aside className="rail"><a className="brand" href="#" aria-label="اطلس"><Scan size={25}/></a><button className="rail-active" title="دیتاست‌ها"><Layers/></button><div className="rail-line"/><span className="vertical">LIDAR ATLAS</span><span className={`connection ${connected ? 'online' : ''}`} title={connected ? 'بک‌اند متصل است' : 'بک‌اند در دسترس نیست'}/></aside>
+    <main><header><div><span className="eyebrow">GEOSPATIAL WORKSPACE / 01</span><h1>اطلس ابرنقاط<span>LiDAR</span></h1></div><div className="header-meta"><span className={connected ? 'live' : 'offline'}><i/>{connected ? 'اتصال برقرار است' : 'بک‌اند در دسترس نیست'}</span><a href={`${import.meta.env.VITE_API_URL || '/api/v1'}/docs`} target="_blank" rel="noreferrer">مستندات API <ArrowUpLeft size={14}/></a></div></header>
+    {error && <div role="alert" className="error">{error}<button onClick={() => setError('')}>بستن</button></div>}
+    <section className="workspace"><div className="sidebar"><div className="section-heading"><span>داده‌های شما</span><span className="number">{String(total).padStart(2, '0')}</span></div>
+    <div className={`dropzone ${busy ? 'uploading' : ''}`} onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!busy) setFile(e.dataTransfer.files[0] ?? null); }}><input ref={input} type="file" accept=".las,.laz" disabled={busy} onChange={e => setFile(e.target.files?.[0] ?? null)}/><div className="upload-icon"><UploadCloud size={26}/></div><h2>{session ? 'ادامهٔ آپلود شما' : 'از فایل تا منظرهٔ سه‌بعدی'}</h2><p>{session ? `فایل «${session.originalFilename}» را دوباره انتخاب کنید.` : 'فایل را اینجا رها کنید یا از دستگاه انتخاب کنید.'}</p><button className="primary" disabled={busy} onClick={() => input.current?.click()}>{file ? file.name : 'انتخاب فایل LAS / LAZ'}</button><span className="hint">LAS / LAZ · حداکثر ۱ GB · آپلود مستقیم</span>
+    {(file || session) && <div className="upload-state"><div className="progress-info"><span>{busy ? 'در حال انتقال' : progress === 100 ? 'در حال نهایی‌سازی / تلاش مجدد' : 'آماده / متوقف'}</span><b>{progress}%</b></div><progress max={100} value={progress}/><small dir="ltr">{bytes(loaded)} / {bytes(Number(session?.fileSize || file?.size || 0))}</small><div className="upload-actions"><button disabled={!file || busy} onClick={start}><Play size={14}/> {session ? 'ادامه / تلاش مجدد' : 'شروع آپلود'}</button>{busy && <button onClick={() => controller.current?.abort()}><Pause size={14}/> توقف</button>}<button disabled={busy} onClick={cancel}>لغو</button></div></div>}</div>
+    <div className="library-heading"><h2>کتابخانهٔ دیتاست‌ها</h2><button title="تازه‌سازی" onClick={refresh}><RefreshCw size={15}/></button></div><input className="search" placeholder="جست‌وجوی نام فایل…" aria-label="جست‌وجوی دیتاست" value={search} onChange={e => { setSearch(e.target.value); setPage(1); }}/>
+    <div className="dataset-list">{datasets.length === 0 && <div className="empty-list"><FileBox size={24}/><p>{connected ? 'اولین دیتاست خود را اضافه کنید.' : 'برای دریافت لیست، بک‌اند را اجرا کنید.'}</p></div>}{datasets.map(d => <article className={`dataset ${selected?.id === d.id ? 'selected' : ''}`} key={d.id}><button className="dataset-select" onClick={() => { setSelected(d); setPoints(0); }}><span className="file-icon"><Mountain size={18}/></span><span><strong dir="auto">{d.originalFilename}</strong><small>{bytes(Number(d.fileSize))} <span>·</span> {new Date(d.createdAt).toLocaleDateString('fa-IR')}</small></span>{d.status === 'READY' && <Check size={14} className="check"/>}</button><div className="dataset-bottom"><span className={`badge ${d.status.toLowerCase()}`}>{labels[d.status] || d.status}</span><div>{d.status === 'FAILED' && <button title="پردازش مجدد" onClick={() => action(d)}><RefreshCw size={14}/></button>}<button title="حذف دیتاست" onClick={() => action(d, true)}><Trash2 size={14}/></button></div></div>{d.processingError && <small className="dataset-error">{d.processingError}</small>}</article>)}</div>{total > 12 && <div className="pagination"><button disabled={page === 1} onClick={() => setPage(p => p - 1)}>قبلی</button><span>{page} / {Math.ceil(total / 12)}</span><button disabled={page * 12 >= total} onClick={() => setPage(p => p + 1)}>بعدی</button></div>}
+    </div><div className="map-panel"><div className="map-top"><span><i className="map-dot"/> نمای مکانی</span><span dir="ltr">MAPLIBRE / 3D POINT CLOUD</span></div><Suspense fallback={<div className="map-loading">در حال آماده‌سازی نقشه…</div>}><Viewer dataset={selected} size={pointSize} visible={visible} onPoints={setPoints}/></Suspense><div className="viewer-toolbar"><div><Crosshair size={16}/><strong>{selected?.originalFilename || 'فضای کاوش شما'}</strong><span>{selected ? labels[selected.status] : 'یک دیتاست را از کتابخانه انتخاب کنید'}</span></div><label>اندازهٔ نقاط <input type="range" min="1" max="6" step="0.5" value={pointSize} onChange={e => setPointSize(Number(e.target.value))}/></label><label className="visibility"><input type="checkbox" checked={visible} onChange={e => setVisible(e.target.checked)}/> نمایش لایه</label></div><div className="map-bottom"><span>دریافت تدریجی · COPC / LOD</span><span dir="ltr">{points.toLocaleString()} POINTS LOADED</span></div></div></section>
+    <footer><span>دادهٔ دقیق، دیدی وسیع‌تر.</span><span dir="ltr">LAS → MULTIPART → COPC → MAP</span></footer></main></div>;
+}
