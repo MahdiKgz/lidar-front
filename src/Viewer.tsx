@@ -8,6 +8,7 @@ import { api, type Dataset } from './api';
 
 export default function Viewer({ dataset, size, visible, onPoints }: { dataset: Dataset | null; size: number; visible: boolean; onPoints: (n: number) => void }) {
   const container = useRef<HTMLDivElement>(null), mapRef = useRef<maplibregl.Map | null>(null);
+  const styleReady = useRef<Promise<void> | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null), materialRef = useRef<THREE.PointsMaterial | null>(null);
   const [error, setError] = useState(''), [message, setMessage] = useState('');
   useEffect(() => {
@@ -16,6 +17,7 @@ export default function Viewer({ dataset, size, visible, onPoints }: { dataset: 
       version: 8, sources: { basemap: { type: 'raster', tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'], tileSize: 256, attribution: '© OpenStreetMap contributors © CARTO' } }, layers: [{ id: 'base', type: 'raster', source: 'basemap', paint: { 'raster-saturation': -0.9, 'raster-opacity': 0.65 } }],
     } });
     } catch { setError('WebGL در این مرورگر در دسترس نیست. شتاب‌دهی سخت‌افزاری را فعال کنید یا مرورگر دیگری را امتحان کنید.'); return; }
+    styleReady.current = new Promise<void>(resolve => { map.once('style.load', () => resolve()); });
     map.addControl(new maplibregl.NavigationControl(), 'top-left'); map.addControl(new maplibregl.ScaleControl(), 'bottom-left'); mapRef.current = map;
     return () => { map.remove(); mapRef.current = null; };
   }, []);
@@ -36,7 +38,7 @@ export default function Viewer({ dataset, size, visible, onPoints }: { dataset: 
         const getter = async (begin: number, end: number) => {
           if (end - begin > 32 * 1024 * 1024) throw new Error('گرهٔ فایل بیش از محدودیت حافظه است.');
           if (Date.now() > expiry) { const signed = await api<{ url: string; expiresIn: number }>(`/datasets/${dataset.id}/copc`); url = signed.url; expiry = Date.now() + (signed.expiresIn - 20) * 1000; }
-          const response = await fetch(url, { headers: { Range: `bytes=${begin}-${end - 1}` }, signal: abort.signal });
+          const response = await fetch(url, { headers: { Range: `bytes=${begin}-${end - 1}` }, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(20000)]) });
           if (response.status !== 206) { await response.body?.cancel(); throw new Error('فضای ذخیره‌سازی باید درخواست Range را با وضعیت 206 پاسخ دهد.'); }
           const data = new Uint8Array(await response.arrayBuffer()); if (data.length !== end - begin) throw new Error('پاسخ Range ناقص است.'); return data;
         };
@@ -51,12 +53,21 @@ export default function Viewer({ dataset, size, visible, onPoints }: { dataset: 
         const bounds = new maplibregl.LngLatBounds();
         for (const x of [cube[0], cube[3]]) for (const y of [cube[1], cube[4]]) bounds.extend(geographic(x, y));
         if (disposed) return;
-        if (!map.isStyleLoaded()) await new Promise<void>(resolve => map.once('load', () => resolve()));
+        setMessage('در حال آماده‌سازی لایهٔ نقشه…');
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([styleReady.current, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('بارگذاری استایل نقشه طولانی شد. اتصال شبکه به سرویس نقشه را بررسی کنید.')), 20000); })]); }
+        finally { if (timer) clearTimeout(timer); }
         if (disposed) return;
         map.addLayer(layer); map.fitBounds(bounds, { padding: 100, maxZoom: 20, duration: 1200 });
+        setMessage('در حال خواندن سلسله‌مراتب نقاط…');
         const hierarchy = await Copc.loadHierarchyPage(getter, copc.info.rootHierarchyPage);
         const nodes: Hierarchy.Node.Map = { ...hierarchy.nodes }, pages = { ...hierarchy.pages };
-        const lazPerf = await Las.PointData.createLazPerf({ locateFile: (name: string) => `${import.meta.env.BASE_URL}${name}` });
+        setMessage('در حال آماده‌سازی رمزگشای LAZ…');
+        const lazPerf = await new Promise<Awaited<ReturnType<typeof Las.PointData.createLazPerf>>>((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('بارگذاری رمزگشای LAZ طولانی شد. فایل laz-perf.wasm باید در دسترس باشد.')), 20000);
+          Las.PointData.createLazPerf({ locateFile: (name: string) => `${import.meta.env.BASE_URL}${name}`, onAbort: () => { clearTimeout(timeout); reject(new Error('راه‌اندازی رمزگشای LAZ ناموفق بود.')); } }).then((result: Awaited<ReturnType<typeof Las.PointData.createLazPerf>>) => { clearTimeout(timeout); resolve(result); }, (error: unknown) => { clearTimeout(timeout); reject(error); });
+        });
+        setMessage('در حال دریافت اولین گره‌های ابرنقاط…');
         const nodeBounds = (key: string) => Bounds.stepTo(cube, key.split('-').map(Number) as [number, number, number, number]);
         const priority = (key: string) => {
           const b = nodeBounds(key);
