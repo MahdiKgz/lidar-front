@@ -43,3 +43,7 @@ Removed the centered introductory map overlay ("دنیای داده‌ها را 
 ## Ground-relative display (2026-11-10)
 
 At the user's request, the flat-basemap viewer now subtracts the COPC header minimum Z from point display elevations, then adds 2 metres clearance. Camera center elevation uses the same display transform and the Mercator origin has zero elevation. Original point heights, downloads, COPC and metadata remain untouched; elevation colors still use original heights. This supersedes the absolute-height camera-only approach above. The constant offset preserves all height differences and terrain slope; high ridges remain higher than low terrain. This is visual alignment with a flat map, not DEM/vertical-datum registration.
+
+## Live status via SSE
+
+The page opens one EventSource to `${VITE_API_URL}/datasets/events`. Five-second list polling and three-second selected-file polling are removed. Dataset updates and progress patch React state directly. New/deleted records and stream reconnect request a debounced REST snapshot (including selected status), rather than periodic requests. A query/page change and explicit actions still fetch REST as needed. Native EventSource reconnect handles interrupted connections; unmount closes the connection. Binary upload progress continues to use XHR byte counts. Processing percentages are stage milestones, not estimated conversion completion time.
