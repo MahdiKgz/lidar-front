@@ -1,4 +1,5 @@
 /// <reference lib="webworker" />
+import { linearRgb } from './point-color';
 import { displayElevation } from './display-elevation';
 import { Copc, Las } from 'copc';
 import { mercatorPosition } from './mercator';
@@ -8,10 +9,17 @@ self.onmessage = async ({ data }) => {
   try {
     runtime ??= Las.PointData.createLazPerf({ locateFile: (name: string) => new URL(name, data.assetBase).href });
     const lazPerf = await runtime;
-    const view = await Copc.loadPointDataView(async () => new Uint8Array(data.compressed), data.copc, data.node, { lazPerf, include: ['X', 'Y', 'Z'] });
+    const supportsRgb = [2, 3, 5, 7, 8, 10].includes(data.copc.header.pointDataRecordFormat);
+    const view = await Copc.loadPointDataView(async () => new Uint8Array(data.compressed), data.copc, data.node, { lazPerf, include: supportsRgb ? ['X', 'Y', 'Z', 'Red', 'Green', 'Blue'] : ['X', 'Y', 'Z'] });
     const projection = mapProjection(data.copc.wkt);
     const x = view.getter('X'), y = view.getter('Y'), z = view.getter('Z');
     const positions = new Float32Array(view.pointCount * 3), colors = new Float32Array(view.pointCount * 3);
+    const rgbColors = new Float32Array(view.pointCount * 3);
+    const rgb = supportsRgb ? [view.getter('Red'), view.getter('Green'), view.getter('Blue')] : null;
+    let maxRgb = 0;
+    if (rgb) for (let i = 0; i < view.pointCount; i++) maxRgb = Math.max(maxRgb, rgb[0](i), rgb[1](i), rgb[2](i));
+    const hasRgb = supportsRgb && maxRgb > 0;
+    const maximum = maxRgb <= 255 ? 255 : 65535;
     const [minZ, maxZ] = [data.copc.header.min[2], data.copc.header.max[2]];
     for (let i = 0; i < view.pointCount; i++) {
       const [lng, lat] = projection.forward([x(i), y(i)]);
@@ -23,6 +31,9 @@ self.onmessage = async ({ data }) => {
       // Linear RGB gradient; avoid allocating a Color for every point.
       colors[i * 3] = 0.15 + 0.8 * t; colors[i * 3 + 1] = 0.65 + 0.25 * (1 - Math.abs(2 * t - 1)); colors[i * 3 + 2] = 0.95 - 0.85 * t;
     }
-    self.postMessage({ positions, colors }, { transfer: [positions.buffer, colors.buffer] });
+    if (hasRgb && rgb) {
+      for (let i = 0; i < view.pointCount; i++) for (let channel = 0; channel < 3; channel++) rgbColors[i * 3 + channel] = linearRgb(rgb[channel](i), maximum);
+    } else rgbColors.set(colors);
+    self.postMessage({ positions, colors, rgbColors, hasRgb }, { transfer: [positions.buffer, colors.buffer, rgbColors.buffer] });
   } catch (error) { self.postMessage({ error: viewerError(error) }); }
 };

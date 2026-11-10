@@ -47,3 +47,23 @@ At the user's request, the flat-basemap viewer now subtracts the COPC header min
 ## Live status via SSE
 
 The page opens one EventSource to `${VITE_API_URL}/datasets/events`. Five-second list polling and three-second selected-file polling are removed. Dataset updates and progress patch React state directly. New/deleted records and stream reconnect request a debounced REST snapshot (including selected status), rather than periodic requests. A query/page change and explicit actions still fetch REST as needed. Native EventSource reconnect handles interrupted connections; unmount closes the connection. Binary upload progress continues to use XHR byte counts. Processing percentages are stage milestones, not estimated conversion completion time.
+
+## Natural RGB color
+
+The viewer defaults to the LAS RGB dimensions when present and nonzero. A color selector switches between natural RGB and elevation using resident buffer attributes, without re-fetching or decoding nodes. RGB is normalized from LAS 16-bit values (with a node-level 8-bit fallback) and converted from sRGB to linear RGB for Three.js. Missing/all-zero RGB falls back to the elevation gradient. Decoding and coloring remain in the Web Worker. This supersedes the earlier elevation-only description.
+
+Autzen source and processed COPC both have Red/Green/Blue dimensions (format 7); an actual processed root-node RGB sample was [41216,41728,39936]. No separate image/orthophoto is fetched or inferred. Visual appearance depends on resident point density and point size; this feature does not imply that screenshot-quality rendering has been verified in the WebGL-disabled in-app browser.
+
+## Zoom-dependent COPC detail
+
+LOD selection now uses projected 3D node bounds (including the display elevation offset) and a target projected point spacing of 1.5 pixels. Closer zoom makes deeper nodes eligible; root/ancestor chunks remain additive. Relevant hierarchy pages are expanded in priority order, with up to eight pages per pass and continuation when more are needed. View changes during loading schedule another selection pass. Offscreen nodes are evicted; resident points are capped at 750,000 and individual decoded nodes at 32 MiB. This supersedes the earlier fixed 200,000-point and ground-only viewport selection. Point count is not guaranteed to increase monotonically: a close view may cover a smaller area, while local point density increases. The cap can still limit extreme close-range detail. Automated tests verify progressive detail eligibility and bounded memory; visual zoom behavior must be checked in a WebGL2-capable browser.
+
+## Detail presets
+
+The map toolbar now offers balanced (750k points / 1.5 pixel target spacing), high (2m / 0.75px), and ultra (4m / 0.35px). Ultra is the default requested detail level. Changing presets reselects nodes using the existing cache/worker and continues hierarchy refinement; it does not recreate the map or reload all resident nodes. The 32 MiB single-node decoded limit remains. Higher presets use more GPU/CPU memory and network, and do not increase source measurement accuracy.
+
+Selection benchmark with actual Autzen root hierarchy and an assumed 1600-pixel full-scene projected extent (not a real browser FPS/visibility measurement): balanced selected 23 nodes / 746,756 points / maximum depth 3; high 63 nodes / 1,999,536 points / depth 4; ultra 120 nodes / 3,999,561 points / depth 5. Build and 16 frontend tests passed. Actual camera footprint and available source density determine final visible counts.
+
+## Zero-clearance model anchor
+
+All models now use `displayZ = originalZ - header.minZ` with zero clearance above the flat basemap. The previous two-metre clearance is removed. The worker geometry, camera target and LOD bounds share this transform. Every dataset's minimum elevation is at map Z=0; height differences, sloped terrain and building heights remain intact. This anchors the model base and does not flatten all points onto a plane or register an uneven ground surface against a DEM. Original files and metadata are unchanged.
