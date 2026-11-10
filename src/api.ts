@@ -2,7 +2,7 @@ export type Dataset = { id: string; originalFilename: string; fileSize: string; 
 export type Session = { datasetId: string; uploadSessionId: string; originalFilename: string; fileSize: string; partSize: number; totalParts: number; expiresAt: string; fingerprint?: string };
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const response = await fetch(`${import.meta.env.VITE_API_URL || '/api/v1'}${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(15000) });
-  if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(error?.message?.toString() || `خطای ارتباط: ${response.status}`); }
+  if (!response.ok) { const error = await response.json().catch(() => null); throw new Error(response.status >= 500 ? 'سرور پاسخ نداد. کمی بعد دوباره امتحان کنید.' : error?.message?.toString() || 'درخواست انجام نشد. دوباره امتحان کنید.'); }
   return response.status === 204 ? undefined as T : response.json();
 }
 export const bytes = (n: number) => n >= 1073741824 ? `${(n / 1073741824).toFixed(2)} GB` : n >= 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${(n / 1024).toFixed(1)} KB`;
